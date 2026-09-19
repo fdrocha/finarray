@@ -139,6 +139,30 @@ class Bars(SelMixin):
         # For some reason the encoding part is not being used...
         self[var].to_netcdf(self._get_var_path(var), encoding={var: {"dtype": self[var].dtype}})
 
+    def delete_var(self, var: str, missing_ok: bool = False) -> bool:
+        """Delete a variable's file from *this* directory.
+
+        Never touches a parent in the inheritance chain: if `var` is only
+        present upstream, this raises rather than reaching outside the
+        directory it was called on. Returns whether a file was removed.
+        """
+        path = self._get_var_path(var)
+        # lexists, not exists: an alias is a symlink and may well be broken.
+        if not os.path.lexists(path):
+            if missing_ok:
+                return False
+            if self._find_var_path(var) is not None:
+                raise util.FinArrayError(
+                    f"Variable {var!r} is inherited from a parent of {self.path}, "
+                    "not local to it; refusing to delete it from the parent."
+                )
+            raise FileNotFoundError(f"No variable {var!r} in {self.path}")
+        os.remove(path)
+        self._live_vars_on_disk.discard(var)
+        if var in self.dataset.data_vars:
+            del self.dataset[var]
+        return True
+
     def set_alias(self, alias_name: str, var: str, remove_old: bool = False):
         var_path = self._get_var_path(var)
         alias_path = self._get_var_path(alias_name)

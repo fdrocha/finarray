@@ -358,6 +358,46 @@ would need.
 **Also fixed in v0.2 code:** `mapcat`'s "produced nothing" error called `len(list(dates_))` on an
 iterator that the progress wrapper may already have consumed, so it would have reported 0 dates.
 
+## v0.4: the rest of the CLI
+
+`src/finarray/cli/` is now a package: `_common.py` (date-spec parsing, error reporting),
+`info.py` (ls, check), `query.py`, `ingest.py` (import-csv, import-parquet, link),
+`derive.py` (eval, rm). Eight subcommands.
+
+**`query` streams, and that is the point.** It emits rows date by date and stops as soon as it has
+the requested number, so a capped query against 363 dates of 1689 tickers x 661 times reads one
+date in under a second. Within a date it bounds the time dimension to `ceil(limit / n_tickers)`
+steps before converting to pandas, and when that leaves a single step it bounds tickers too. Both
+are only correct because `Dataset.to_dataframe()` emits rows in (time, ticker) order — so
+`test_limited_output_is_a_true_prefix_of_the_full_output` parametrizes over limits and asserts the
+bounded result equals the head of the unbounded one. **If that ordering assumption ever breaks, that
+test is what catches it.** Two more tests assert the read really is bounded (dates touched, frame
+sizes converted) rather than truncated after the fact.
+
+Default limit is 50 rows to stdout; `--output FILE` implies no limit unless `--limit` is explicit.
+The truncation notice goes to stdout as `# ...` so CSV consumers can skip it as a comment.
+Parquet export streams per date through a `ParquetWriter`.
+
+**`rm` will not delete out of a parent.** `Bars.delete_var` (new) refuses when the variable is only
+present upstream, so a child directory cannot damage the data it inherits. It uses `os.path.lexists`
+so a broken alias symlink is still removable.
+
+**`eval --all-dates`** closes the TODO on line 8 of the original `freval`
+("should be able to run it on basedir and generate it for everything"). `--dir` still means a single
+date directory unless `--all-dates`/`--dates` is given, so existing invocations are unaffected.
+
+**Library changes made for the CLI:**
+
+- `FinArrayError` now subclasses `ValueError`, and `util.check` raises it. These always *were*
+  value errors; the distinct type lets the CLI separate an expected failure (one line) from a bug
+  (traceback). Every existing `pytest.raises(ValueError)` still passes.
+- `create_child_bars` raises through `util.check` instead of bare `ValueError`, and expands `~`.
+- `Bars.delete_var` / `BarsSet.delete_var` added — there was no way to delete a variable at all
+  before, from the CLI or from Python (`__delitem__` only touches the in-memory dataset).
+- `cli.main` catches `BrokenPipeError`, so `finarray query ... | head` exits cleanly.
+- The CLI translates a `NameError` from a bad expression into a `FinArrayError` listing the
+  variables that do exist.
+
 ## Which `fr*` scripts were left behind
 
 `frgendaily`, `frgenimb` and `frgeneimb` are not portable and are not planned. Each is a thin date
@@ -366,9 +406,7 @@ enum dropped in v0.1; NYSE imbalance message fields via `imbalances`; early-imba
 `rblt_eimb` with `nbatches = 3` baked in. All three also default `--dir` to
 `/Users/fabio/trading/bars/eod`. Strip the domain knowledge and nothing is left.
 
-`frdaily` (79 lines) *is* generic — parquet with a `(date, ticker)` MultiIndex → ticker-only daily
-variables via `add_daily_var` — and is the obvious next port if wanted. pyarrow is already in place
-for it.
+`frdaily` was ported in v0.4 as `finarray import-parquet`, which is what pyarrow is there for.
 
 ## Why `dds` was not brought across
 

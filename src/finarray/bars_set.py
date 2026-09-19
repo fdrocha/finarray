@@ -28,10 +28,13 @@ def create_child_bars(child_path: str, parent_path: str) -> None:
     """
     Create a child bars directory that links to a parent directory.
     """
-    if os.path.exists(child_path):
-        raise ValueError(f"Child path {child_path} already exists")
-    if not os.path.isdir(parent_path):
-        raise ValueError(f"Parent path {parent_path} does not exist or is not a directory")
+    child_path = os.path.expanduser(child_path)
+    parent_path = os.path.expanduser(parent_path)
+    util.check(not os.path.exists(child_path), f"Child path {child_path} already exists")
+    util.check(
+        os.path.isdir(parent_path),
+        f"Parent path {parent_path} does not exist or is not a directory",
+    )
     os.makedirs(child_path, exist_ok=False)
     os.symlink(parent_path, os.path.join(child_path, _PARENT_LINK_NAME))
 
@@ -186,6 +189,21 @@ class BarsSet(SelMixin):
     def load_vars(self, vars: Iterable[str] | str, reload: bool = False) -> None:
         for bars in self._loaded_dates.values():
             bars.load_vars(vars, reload)
+
+    def delete_var(self, var: str, dates: Iterable[dt.date] | None = None) -> list[dt.date]:
+        """Delete a variable from every given date (default: all available).
+
+        Only deletes from this base directory, never from a parent. Returns the
+        dates a file was actually removed from.
+        """
+        removed = []
+        for date in self._dates_or_available(dates):
+            if self[date].delete_var(var, missing_ok=True):
+                removed.append(date)
+        return removed
+
+    def _dates_or_available(self, dates: Iterable[dt.date] | None) -> list[dt.date]:
+        return list(dates) if dates is not None else self.dates_available()
 
     def _parse_date_or_index(self, date_or_index: dt.date | str | int) -> dt.date:
         if isinstance(date_or_index, str):

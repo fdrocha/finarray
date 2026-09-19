@@ -350,75 +350,190 @@ simulation of execution.
 
 ## Command line
 
-Installing the package puts a `finarray` command on your path, with two subcommands that cover
-getting data in and deriving things from it once it is there.
+Installing the package puts a `finarray` command on your path:
 
-### `finarray import-csv` — CSVs to date directories
+```
+finarray ls BASEDIR                     what a directory holds
+finarray check BASEDIR                  look for gaps and inconsistencies
+finarray query BASEDIR -v mid           read data out, to stdout or a file
+finarray import-csv BASEDIR FILE...     CSVs -> date directories
+finarray import-parquet BASEDIR FILE    daily (date, ticker) values
+finarray eval --dir DIR EXPR...         derive variables and save them
+finarray link CHILD PARENT              a child directory inheriting a parent
+finarray rm BASEDIR VAR...              delete variables
+```
 
-Each CSV needs `time` and `ticker` columns and a `YYYY-MM-DD` date somewhere in its filename:
+Set `PY_TRACEBACK=1` for full tracebacks instead of one-line error messages.
+
+### `finarray ls` — what's in there
+
+```console
+$ finarray ls bars/eod
+bars/eod
+  PARENT: (none)
+  363 dates: 2025-01-13 .. 2026-06-30
+  at 2026-06-30: 1689 tickers x 661 times (2026-06-30T15:49:00 .. 2026-06-30T16:00:00)
+  66 variables:
+      Nasize
+      Nask
+      ...
+```
+
+On a child directory it marks what is inherited rather than local:
+
+```console
+$ finarray ls bars/eod_bkt
+bars/eod_bkt
+    PARENT: bars/eod
+  363 dates: 2025-01-13 .. 2026-06-30
+  66 variables (0 local, 66 inherited):
+    ^ Nasize
+    ...
+```
+
+`--dates-only` and `--vars-only` print one item per line, for shell loops.
+
+### `finarray query` — read data out
+
+Writes CSV to stdout, capped at 50 rows so an exploratory query can't flood your terminal:
+
+```console
+$ finarray query bars/eod -v mid,bid --ticker SPY --time 15:54:00
+date,mid,bid
+2025-01-13,581.0,580.989990234375
+2025-01-14,581.5150146484375,581.5
+...
+```
+
+Selecting a **single** ticker or time drops that column; selecting a **list** keeps it — the same
+rule as `sel_ticker`/`sel_time` in Python, with the date always first:
+
+| flags | columns |
+| --- | --- |
+| *(none)* | `date, time, ticker, …` |
+| `--ticker SPY --time 15:54:00` | `date, …` |
+| `--time 15:54:00` | `date, ticker, …` |
+| `--tickers SPY,AAA` | `date, time, ticker, …` |
 
 ```bash
-finarray import-csv bars/eod quotes-*.csv
+finarray query bars/eod -v mid --time-slice 15:50:00,15:59:59 --ticker SPY
+finarray query bars/eod -v mid -D 2025-01-13:2025-01-17        # inclusive date range
+finarray query bars/eod -v mid -D 2025-01-13,2025-01-15        # or a list
 ```
 
-```
-bars/eod/2025-01-13/{ticker.csv,time.csv,bid.nc,ask.nc}
-bars/eod/2025-01-14/...
+**The limit is a read budget, not a truncation.** `query` streams: it produces rows date by date and
+stops as soon as it has enough, so a capped query against 363 dates of 1689 × 661 bars reads one
+date — and within it, one time step:
+
+```console
+$ time finarray query bars/eod -v mid
+date,time,ticker,mid
+2025-01-13,2025-01-13 15:49:00,A,133.3
+...
+# ... stopped at 50 rows. Use --limit N for more, --limit 0 for all, or --output FILE to export.
+0.92s total
 ```
 
-`--force` replaces a date directory that already exists. `--add` goes the other way: it keeps an
-existing directory's coordinates and writes the CSV's columns into it as extra variables, which is
-how you attach a second source to a day you already have.
+`--limit N` raises it, `--limit 0` removes it.
+
+### Exporting
+
+`--output` writes to a file instead, with no limit unless you ask for one. The format comes from the
+extension (`.csv`, `.tsv`, `.parquet`) or `--format`:
 
 ```bash
-finarray import-csv --add bars/eod trades-2025-01-13.csv
-finarray import-csv --rename 'raw_%s' bars/eod quotes-2025-01-13.csv   # -> raw_bid, raw_ask
+finarray query bars/eod -v mid,bid --ticker SPY -o spy.csv
+finarray query bars/eod -v mid --time 15:54:00 -D 2025-06-01:2025-06-30 -o june.parquet
 ```
 
-A file that fails is reported and skipped; the rest of the batch still runs, and the exit status is
-non-zero if anything failed.
+Parquet is written in per-date chunks as the data is collected, so exporting more than fits in
+memory is fine.
 
-### `finarray eval` — derive variables and save them
+### `finarray eval` — derive variables
 
-Expressions run against one date directory, and autoload whatever they name — you don't list inputs:
+Expressions autoload whatever they name, so nothing has to be listed up front:
 
 ```bash
 finarray eval --dir bars/eod/2025-01-13 'mid=(bid+ask)/2' 'spread=ask-bid'
 ```
 
-Every variable the expressions create is written to the directory. `--filter` takes a boolean
-expression and masks the created variables to where it holds, which is the idiomatic way to drop
-bad data at the point of derivation rather than at every use:
+`--all-dates` runs over a whole base directory instead of one date, and `--dates` narrows that:
 
 ```bash
-finarray eval --dir bars/eod/2025-01-13 \
+finarray eval --dir bars/eod --all-dates 'mid=(bid+ask)/2'
+finarray eval --dir bars/eod -D 2025-01-13:2025-01-17 'mid=(bid+ask)/2'
+```
+
+`--filter` masks the created variables to where a boolean expression holds, which is how you drop
+bad data once rather than at every use:
+
+```bash
+finarray eval --dir bars/eod --all-dates \
     -f '(abs(ask-bid) <= ask*0.01) | (abs(ask-bid) <= 0.05)' \
     'mid=(bid+ask)/2'
 ```
 
-That writes `mid` as NaN wherever the quote was implausibly wide, and leaves it alone elsewhere.
+That writes `mid` as NaN wherever the quote was implausibly wide. `--skip-errors` warns and carries
+on past a date that fails instead of stopping.
 
-### The two together
+### Getting data in
 
-Building a set of bars from scratch is usually one loop:
+`import-csv` builds date directories. Each file needs `time` and `ticker` columns and a
+`YYYY-MM-DD` date somewhere in its name:
 
 ```bash
-finarray import-csv --force bars/eod quotes-*.csv
-for d in bars/eod/*/; do
-    finarray eval --dir "$d" -f '(abs(ask-bid) <= ask*0.01)' 'mid=(bid+ask)/2'
-done
+finarray import-csv bars/eod quotes-*.csv
+finarray import-csv --add bars/eod trades-2025-01-13.csv     # extra variables, existing coords
+finarray import-csv --rename 'raw_%s' bars/eod quotes-2025-01-13.csv
 ```
 
-After which the Python API above has something to open:
+`--force` replaces a date that already exists. A file that fails is reported and skipped; the rest
+of the batch still runs, and the exit status is non-zero if anything failed.
 
-```python
-bars = fr.BarsSet("bars/eod")
-bars.sel_ticker("AAA").sel_time("15:50:00").cat_var("mid")
+`import-parquet` attaches daily, ticker-only values from a parquet file indexed by `(date, ticker)`
+— one value per ticker per day, such as a sector code or an ADV:
+
+```bash
+finarray import-parquet bars/eod daily.parquet
+finarray import-parquet bars/eod daily.parquet -v adv,sector -D 2025-01-13:2025-01-17
 ```
 
-Set `PY_TRACEBACK=1` to get full tracebacks instead of one-line error messages.
+Dates in the file that the bars don't have are skipped.
 
-## API summary
+### `finarray link` and `finarray rm`
+
+`link` creates a child directory that inherits a parent's dates and variables — the scratch-space
+pattern from [Layering with `PARENT`](#layering-with-parent):
+
+```bash
+finarray link bars/eod_bkt bars/eod
+```
+
+`rm` deletes variables. It asks before deleting, takes `--dry-run`, and **will not delete out of a
+parent**: a variable you only inherit is reported and left alone, so you cannot damage the upstream
+data from inside a child directory.
+
+```bash
+finarray rm bars/eod stale_signal --dry-run
+finarray rm bars/eod stale_signal old_alpha -D 2025-01-13:2025-01-17 -y
+```
+
+### `finarray check` — find gaps
+
+```console
+$ finarray check bars/eod
+363 date(s), 66 variable(s) in bars/eod
+
+2 variable(s) missing on some dates:
+  beta_spy                 missing on 2 date(s): 2025-03-20, 2025-04-01
+  ei_imbalance3            missing on 1 date(s): 2026-06-30
+```
+
+That's how you spot a generation run that half-failed. It exits non-zero if anything is wrong. The
+default check is cheap — presence only. `--shapes` additionally opens every variable file and checks
+its dimensions against the date's coordinates, which is thorough but slow.
+
+## API summary## API summary
 
 **`Bars`** — one date.
 `get_var` · `get_vars` · `get_value` · `load_var(s)` · `eval` · `assign` · `save_var(s)` ·
@@ -439,7 +554,8 @@ Set `PY_TRACEBACK=1` to get full tracebacks instead of one-line error messages.
 `run_backtest` · `run_date` · `BacktestResult` · `Fees` · `summarize` · `daily_stats` · `drawdowns`
 
 **Command line.**
-`finarray import-csv` · `finarray eval`
+`finarray ls` · `finarray check` · `finarray query` · `finarray import-csv` ·
+`finarray import-parquet` · `finarray eval` · `finarray link` · `finarray rm`
 
 ## Development
 

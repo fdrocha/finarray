@@ -17,8 +17,14 @@ import xarray as xr
 T = TypeVar("T")
 
 
-class FinArrayError(Exception):
-    """Base class for errors raised explicitly by finarray."""
+class FinArrayError(ValueError):
+    """Base class for errors raised explicitly by finarray.
+
+    Subclasses ValueError, which is what these have always been: they report a
+    bad argument or a bad value on disk. The distinct type lets the CLI tell an
+    expected failure (report it in one line) from an unexpected one (let it
+    raise, with a traceback).
+    """
 
 
 BARS_TICKER_FILENAME = "ticker.csv"
@@ -215,7 +221,7 @@ def get_dims(
 
 def check(condition: bool, msg: str) -> None:
     if not condition:
-        raise ValueError(msg)
+        raise FinArrayError(msg)
 
 
 def check_first_dims(
