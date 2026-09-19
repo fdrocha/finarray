@@ -9,8 +9,8 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import xarray as xr
-from tqdm.auto import tqdm
 
+from . import util
 from .bars import Bars
 from .bars_set import BarsSet
 
@@ -188,7 +188,7 @@ def profile_fixed(
     extra_prices_date = None
     weights = None
     actual_dates = []
-    for date in tqdm(dates, disable=not do_progress):
+    for date in util.progress_iter(dates, desc="profile", disable=not do_progress):
         df_date = df.loc[date]
         signs = np.sign(df_date[alpha_col]).to_xarray()
         if weight_col is not None:

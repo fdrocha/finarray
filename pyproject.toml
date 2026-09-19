@@ -1,6 +1,6 @@
 [project]
 name = "finarray"
-version = "0.2.0"
+version = "0.3.0"
 description = "xarray-backed intraday bars: per-date (ticker, time) panels with lazy per-variable loading"
 readme = "README.md"
 license = "MIT"
@@ -26,8 +26,11 @@ dependencies = [
     "pandas>=2.0",
     "xarray>=2023.1.0",
     "netCDF4>=1.6",
-    "tqdm>=4.64",
+    "pyarrow>=14.0",
 ]
+
+[project.scripts]
+finarray = "finarray.cli:main"
 
 [project.optional-dependencies]
 # Deliberately loose: let the installer pick whatever numba has wheels for the
@@ -57,6 +60,7 @@ dev = [
     "mypy>=1.11",
     "ruff>=0.6",
     "pandas-stubs",
+    "tqdm>=4.64",
 ]
 # Everything needed to run the suite, minus numba: used by CI to check that the
 # backtest kernels' pure-Python fallback still works.

@@ -38,7 +38,10 @@ That layout buys three things:
 uv add finarray          # or: pip install finarray
 ```
 
-Requires Python 3.11+.
+Requires Python 3.11+. This also installs the [`finarray` command](#command-line).
+
+[tqdm](https://github.com/tqdm/tqdm) is not a dependency, but progress bars use it when it happens
+to be installed, and fall back to a plain stderr counter when it isn't.
 
 ## The layout on disk
 
@@ -246,6 +249,8 @@ ds = util.load_csv("quotes-2024-11-27.csv", date="2024-11-27")
 util.to_frdir(ds, "/tmp/sample-bars")     # creates /tmp/sample-bars/2024-11-27/
 ```
 
+For a directory of files, the [`finarray` command](#command-line) does this from the shell.
+
 ### Return profiles
 
 `finarray.profile` builds return profiles for a signal: take the sign of an alpha per ticker,
@@ -343,6 +348,76 @@ are linear in shares and notional. Positions are flat-to-flat within the day unl
 `unwind_price`. Treat the output as an upper bound with an explicit cost model attached, not as a
 simulation of execution.
 
+## Command line
+
+Installing the package puts a `finarray` command on your path, with two subcommands that cover
+getting data in and deriving things from it once it is there.
+
+### `finarray import-csv` — CSVs to date directories
+
+Each CSV needs `time` and `ticker` columns and a `YYYY-MM-DD` date somewhere in its filename:
+
+```bash
+finarray import-csv bars/eod quotes-*.csv
+```
+
+```
+bars/eod/2025-01-13/{ticker.csv,time.csv,bid.nc,ask.nc}
+bars/eod/2025-01-14/...
+```
+
+`--force` replaces a date directory that already exists. `--add` goes the other way: it keeps an
+existing directory's coordinates and writes the CSV's columns into it as extra variables, which is
+how you attach a second source to a day you already have.
+
+```bash
+finarray import-csv --add bars/eod trades-2025-01-13.csv
+finarray import-csv --rename 'raw_%s' bars/eod quotes-2025-01-13.csv   # -> raw_bid, raw_ask
+```
+
+A file that fails is reported and skipped; the rest of the batch still runs, and the exit status is
+non-zero if anything failed.
+
+### `finarray eval` — derive variables and save them
+
+Expressions run against one date directory, and autoload whatever they name — you don't list inputs:
+
+```bash
+finarray eval --dir bars/eod/2025-01-13 'mid=(bid+ask)/2' 'spread=ask-bid'
+```
+
+Every variable the expressions create is written to the directory. `--filter` takes a boolean
+expression and masks the created variables to where it holds, which is the idiomatic way to drop
+bad data at the point of derivation rather than at every use:
+
+```bash
+finarray eval --dir bars/eod/2025-01-13 \
+    -f '(abs(ask-bid) <= ask*0.01) | (abs(ask-bid) <= 0.05)' \
+    'mid=(bid+ask)/2'
+```
+
+That writes `mid` as NaN wherever the quote was implausibly wide, and leaves it alone elsewhere.
+
+### The two together
+
+Building a set of bars from scratch is usually one loop:
+
+```bash
+finarray import-csv --force bars/eod quotes-*.csv
+for d in bars/eod/*/; do
+    finarray eval --dir "$d" -f '(abs(ask-bid) <= ask*0.01)' 'mid=(bid+ask)/2'
+done
+```
+
+After which the Python API above has something to open:
+
+```python
+bars = fr.BarsSet("bars/eod")
+bars.sel_ticker("AAA").sel_time("15:50:00").cat_var("mid")
+```
+
+Set `PY_TRACEBACK=1` to get full tracebacks instead of one-line error messages.
+
 ## API summary
 
 **`Bars`** — one date.
@@ -362,6 +437,9 @@ simulation of execution.
 
 **`finarray.backtest`** (extra).
 `run_backtest` · `run_date` · `BacktestResult` · `Fees` · `summarize` · `daily_stats` · `drawdowns`
+
+**Command line.**
+`finarray import-csv` · `finarray eval`
 
 ## Development
 

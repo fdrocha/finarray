@@ -7,7 +7,6 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 import xarray as xr
-from tqdm.auto import tqdm
 
 from . import util
 from .bars import Bars
@@ -396,9 +395,12 @@ class BarsSet(SelMixin):
         dfs: list[pd.DataFrame] = []
         dates_ = self._dates(dates)
         good_dates = []
+        # Keep `dates_` as a list: the progress wrapper may be a generator, and
+        # the error below needs the count after it has been consumed.
+        iter_dates: Iterable[dt.date] = dates_
         if progress:
-            dates_ = tqdm(dates_)
-        for date in dates_:
+            iter_dates = util.progress_iter(dates_, desc="mapcat")
+        for date in iter_dates:
             try:
                 day_bars = self[date]
                 df = func(day_bars, *func_args, **func_kwargs)
@@ -415,7 +417,7 @@ class BarsSet(SelMixin):
                 warn(f"BarSet.map_cat: Skipping date={date}, func returned None.", stacklevel=2)
         if not dfs:
             raise ValueError(
-                f"mapcat produced nothing from {len(list(dates_))} date(s): every "
+                f"mapcat produced nothing from {len(dates_)} date(s): every "
                 "date either raised or returned None. Re-run with on_errors='raise' "
                 "to see the underlying error."
             )

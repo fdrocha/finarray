@@ -83,6 +83,48 @@ def dcast(date):
         return date
 
 
+def _simple_progress(
+    iterable: Iterable[T], desc: str | None = None, total: int | None = None
+) -> Iterable[T]:
+    """A counter on stderr, for when tqdm is not installed."""
+    if total is None:
+        try:
+            total = len(iterable)  # type: ignore[arg-type]
+        except TypeError:
+            total = None
+    show = sys.stderr.isatty()
+    label = f"{desc}: " if desc else ""
+    for i, item in enumerate(iterable, 1):
+        if show:
+            sys.stderr.write(f"\r{label}{i}/{total}" if total else f"\r{label}{i}")
+            sys.stderr.flush()
+        yield item
+    if show:
+        sys.stderr.write("\n")
+        sys.stderr.flush()
+
+
+def progress_iter(
+    iterable: Iterable[T],
+    desc: str | None = None,
+    disable: bool = False,
+    total: int | None = None,
+) -> Iterable[T]:
+    """Wrap an iterable in a progress display.
+
+    Uses tqdm when it is installed -- which is what you want in a notebook --
+    and falls back to a plain stderr counter otherwise. tqdm is not a dependency
+    of finarray.
+    """
+    if disable:
+        return iterable
+    try:
+        from tqdm.auto import tqdm
+    except ImportError:
+        return _simple_progress(iterable, desc, total)
+    return tqdm(iterable, desc=desc, total=total)
+
+
 def load_csv(
     path: str,
     time_col: str = "time",

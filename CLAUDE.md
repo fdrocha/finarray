@@ -319,6 +319,57 @@ llvmlite ≥0.45 ships no macOS x86_64 wheel and tries to build against LLVM. Th
 `backtest` extra is unpinned (`numba>=0.59`). The extra also drags numpy down (numba pins it
 tightly), which is a second reason it is not a hard dependency.
 
+## v0.3: the CLI
+
+`src/finarray/cli.py` ports two of the six `fr*` scripts from `quant-research/scripts/`, as
+subcommands of a single `finarray` console script (`[project.scripts]`). One entry point rather
+than three, so the package does not squat on generic names like `frcsv` in everyone's PATH.
+
+- `freval` → `finarray eval`. Was already pure finarray, no dependencies at all.
+- `frcsv` → `finarray import-csv`. Its only outside dependency was `butils.pp_exception_context`,
+  replaced by a local `_report_errors`.
+
+**Verified byte-identical to the originals.** `verify` run in the scratchpad: the same CSV through
+`frcsv -f` + `freval -f '<filter>' 'mid=(bid+ask)/2'` and through the new subcommands produces
+identical `bid.nc`, `ask.nc`, `mid.nc` (same 20 NaNs from the filter) and identical `ticker.csv` /
+`time.csv`. Running the originals needs a stub `butils` on PYTHONPATH, since the real one pulls in
+`more_itertools` and `exchange_calendars`.
+
+**Fixes made during the port:**
+
+- `freval` had a dead second `args = parser.parse_args()` after `save_vars`. Gone.
+- Both scripts called `util.error()`, which since v0.1 raises instead of calling `sys.exit(1)`.
+  `cli.main` now returns proper exit codes, so shell pipelines still detect failure.
+- The date is parsed from `os.path.basename(os.path.normpath(dir))`, so a trailing slash on
+  `--dir` no longer breaks it, and a non-date directory name gives a clear error.
+- `import-csv` reports and skips a bad file rather than abandoning the batch, exiting non-zero
+  at the end. `PY_TRACEBACK=1` still gives full tracebacks, as in the originals.
+
+**tqdm is no longer a dependency.** `util.progress_iter` uses `tqdm.auto` when it is installed
+(which is what you want in a notebook) and otherwise falls back to a plain stderr counter.
+`BarsSet.mapcat(progress=True)` and `profile.profile_fixed(do_progress=True)` go through it. tqdm
+stays in the dev group so both branches are exercised; the `ci-minimal` group has neither tqdm nor
+numba, and CI runs the suite against it.
+
+**pyarrow is now a dependency**, at the user's instruction. Nothing in the package imports it yet —
+it is there for `pd.read_parquet`, which is what a future `finarray daily` (the `frdaily` port)
+would need.
+
+**Also fixed in v0.2 code:** `mapcat`'s "produced nothing" error called `len(list(dates_))` on an
+iterator that the progress wrapper may already have consumed, so it would have reported 0 dates.
+
+## Which `fr*` scripts were left behind
+
+`frgendaily`, `frgenimb` and `frgeneimb` are not portable and are not planned. Each is a thin date
+loop around a specific private dataset: a hardcoded 16-column list from `dds` plus the `Exchange`
+enum dropped in v0.1; NYSE imbalance message fields via `imbalances`; early-imbalance batches via
+`rblt_eimb` with `nbatches = 3` baked in. All three also default `--dir` to
+`/Users/fabio/trading/bars/eod`. Strip the domain knowledge and nothing is left.
+
+`frdaily` (79 lines) *is* generic — parquet with a `(date, ticker)` MultiIndex → ticker-only daily
+variables via `add_daily_var` — and is the obvious next port if wanted. pyarrow is already in place
+for it.
+
 ## Why `dds` was not brought across
 
 Recorded so the question does not get re-litigated. finarray does not import dds — the arrow points
