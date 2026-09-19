@@ -251,7 +251,9 @@ Settled before work started; revisit only with a reason.
 - [x] **3 — README.** Every output shown in it was run and pasted back from real execution.
 - [x] **4 — verified against real bars** (`~/trading/bars/eod`, read-only): 17/17 checks agree
       with the original implementation, plus the inheritance check below.
-- [ ] **5 — `dds`.** Explicitly deferred; not started.
+- [x] **v0.2 — `finarray.backtest`** as an optional extra (see below).
+- [ ] **`dds`.** Explicitly deferred by the user; not started, and not planned. See the analysis
+      recorded below.
 
 ## Changes from the original
 
@@ -281,9 +283,62 @@ ever switches to this package, these are the things to look at.
 7. Dropped the unused `from numba.extending import overload_classmethod` in `bars.py`, so numba is
    no longer an accidental dependency.
 
+## v0.2: the backtest extra
+
+`src/finarray/backtest/` is ported from `quant-research/python-libs/frbkt`, which was 221 lines
+with three non-finarray dependencies. All three were resolved rather than carried:
+
+- `numba` → optional. `engine.py` falls back to a no-op `njit` decorator, so the kernels run as
+  plain Python (with a one-time `RuntimeWarning`) when numba is absent. CI covers both paths.
+- `fees` → `backtest/fees.py`. Only `FeesSimple` was used; the rest of the monorepo's `fees.py`
+  reads a private YAML of exchange schedules at import and pulls in butils/futils. Renamed `Fees`,
+  and `as_not_sell_only` → `as_two_sided` (the old name described the mechanism, not the intent).
+- `backtest.PnlData` → `backtest/result.py`. The original used it only on the last line. Porting it
+  would have meant `butils.daily_stats` + `butils.pnl_summary_stats` + 9 plotly call sites out of
+  `backtest.py`'s 502 lines, so `BacktestResult` is a fresh, dependency-free replacement.
+
+**Kernels.** The original's two near-identical numba kernels (capped and uncapped) are consolidated
+into one `_walk`. Verified against both originals on real bars: `pnl`, `volume` and `dvolume` agree
+to float32 precision on 3 dates × both paths.
+
+**Deliberate behaviour differences from frbkt:**
+
+- `unwind_price` defaults to `None`, not `"close_price"`. A public library should not default to a
+  variable name that may not exist; the cost is that the default leaves positions open.
+- The original's `eod_pos` was the position *before* the closing unwind. That is genuinely useful
+  (it is the size you had to liquidate), but so is the residual after it. Both are now reported:
+  `close_pos` (pre-unwind) and `eod_pos` (post-unwind, therefore zero whenever the run unwinds).
+- Accumulators are float64 rather than float32.
+- A date where nothing traded yields an empty frame rather than `None`, so it no longer warns.
+
+**Also fixed in v0.1 code:** `BarsSet.mapcat` raised `ValueError: No objects to concatenate` when
+every date failed. It now names the number of dates and points at `on_errors="raise"`.
+
+**Dev-environment note:** `numba` in the `dev` group is pinned `<0.62`. This is purely local —
+llvmlite ≥0.45 ships no macOS x86_64 wheel and tries to build against LLVM. The published
+`backtest` extra is unpinned (`numba>=0.59`). The extra also drags numpy down (numba pins it
+tightly), which is a second reason it is not a hard dependency.
+
+## Why `dds` was not brought across
+
+Recorded so the question does not get re-litigated. finarray does not import dds — the arrow points
+the other way (`dds/base_datasets.py:75` imports finarray inside an ingest function), so the
+original premise that it had to come along does not hold. It is also an orthogonal data model:
+daily `(date, ticker)` parquet vs intraday `(time, ticker)` netCDF. The decisive problem is the
+split: `core.py` (331 lines) is the generic, portable engine, but `base_datasets.py` (208 lines) is
+entirely monorepo-specific and unpublishable, and `load_functions.py` — the API actually used day
+to day — resolves column names through the registry that `base_datasets` defines. The proven half
+cannot be published and the publishable half is a generic parquet-per-date store in a crowded
+field. If it ever happens: separate repo, separate package, user-supplied registry.
+
 ## Verification
 
-`/tmp/.../scratchpad/verify_vs_original.py` imports both implementations side by side (stubbing
+Two read-only scripts in the scratchpad, both hardcoding private paths and so kept out of the repo:
+
+`verify_backtest_kernel.py` exec's frbkt's kernels from source with the unimportable lines stripped,
+and diffs them against `_walk` over `~/trading/bars/eod` for both the capped and uncapped paths.
+
+`verify_vs_original.py` imports both implementations side by side (stubbing
 numba so the original loads) and diffs them over `~/trading/bars/eod`: structure, the full
 `cat_var` shape contract, autoloading `eval`, `mapcat`, both `attach_to_df_*` joins,
 `restrict_other`, `sel_universe` vs `sel_where`, and `profile_fixed`. It is read-only and lives in

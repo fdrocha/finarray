@@ -413,6 +413,12 @@ class BarsSet(SelMixin):
                 good_dates.append(date)
             elif on_errors == "warn":
                 warn(f"BarSet.map_cat: Skipping date={date}, func returned None.", stacklevel=2)
+        if not dfs:
+            raise ValueError(
+                f"mapcat produced nothing from {len(list(dates_))} date(s): every "
+                "date either raised or returned None. Re-run with on_errors='raise' "
+                "to see the underlying error."
+            )
         if add_date:
             df_out = pd.concat(dfs, keys=good_dates, names=["date"])
         else:

@@ -1,6 +1,6 @@
 [project]
 name = "finarray"
-version = "0.1.0"
+version = "0.2.0"
 description = "xarray-backed intraday bars: per-date (ticker, time) panels with lazy per-variable loading"
 readme = "README.md"
 license = "MIT"
@@ -29,6 +29,12 @@ dependencies = [
     "tqdm>=4.64",
 ]
 
+[project.optional-dependencies]
+# Deliberately loose: let the installer pick whatever numba has wheels for the
+# target platform. numba pins numpy tightly, so this extra constrains the whole
+# environment's numpy -- which is exactly why it is an extra and not a dependency.
+backtest = ["numba>=0.59"]
+
 [project.urls]
 Homepage = "https://github.com/fdrocha/finarray"
 Repository = "https://github.com/fdrocha/finarray"
@@ -43,11 +49,18 @@ packages = ["src/finarray"]
 
 [dependency-groups]
 dev = [
+    # Upper bound is a local-environment concern, not a library constraint:
+    # llvmlite >=0.45 ships no macOS x86_64 wheel and builds against LLVM from
+    # source. The published `backtest` extra above stays unpinned.
+    "numba>=0.59,<0.62",
     "pytest>=8.0",
     "mypy>=1.11",
     "ruff>=0.6",
     "pandas-stubs",
 ]
+# Everything needed to run the suite, minus numba: used by CI to check that the
+# backtest kernels' pure-Python fallback still works.
+ci-minimal = ["pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

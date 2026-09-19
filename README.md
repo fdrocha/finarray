@@ -268,6 +268,81 @@ ds.ret.mean(dim="date").to_pandas().plot()
 
 `mode="cps"` gives cents per share instead of percent returns.
 
+### Backtesting
+
+`finarray.backtest` turns a path of target positions into pnl. It is an optional extra, because it
+pulls in numba:
+
+```bash
+uv add "finarray[backtest]"      # or: pip install "finarray[backtest]"
+```
+
+State how many shares you want to hold at each bar, and the engine trades the difference at that
+bar's price, charging linear fees:
+
+```python
+from finarray import backtest
+
+result = backtest.run_backtest(
+    bars.sel_time_slice("15:50:00", "15:59:00"),
+    "1e4 / mid",                   # target shares per bar; an expression or a callable
+    prices="mid",                  # what you trade at
+    unwind_price="close_price",    # flatten everything at the close
+    vol_cap_per_bar="volume_cap",  # optional: max shares per bar per ticker
+    fees=backtest.Fees.mils(2.18) + backtest.Fees.bips(1),
+)
+```
+
+`Fees` is quoted the way venues quote it — mils (tenths of a cent) per share, bips (hundredths of a
+percent) of notional — and composes with `+`, `*` and `/`. A `sell_only=True` fee is halved, since
+the engine doesn't track side.
+
+The result summarizes itself:
+
+```python
+>>> result
+<BacktestResult>
+  ndays         40
+  total_pnl     -8.402e+04
+  pnl           -2,101
+  pnl_median    -327.8
+  pnl_std       8,078
+  sharpe        -4.128
+  tstat         -1.645
+  win_rate      42.5
+  best_day      2.101e+04
+  worst_day     -2.008e+04
+  max_drawdown  1.187e+05
+  max_dd_days   39
+  shares        2.398e+05
+  dollars       1.712e+07
+  ntickers      429.1
+  close_pos     1.196e+05
+  cps           -0.8761
+  margin_bps    -1.227
+```
+
+`sharpe` annualizes daily pnl over 252 days and `tstat` says whether the mean daily pnl is
+distinguishable from zero. `cps` (cents per share) and `margin_bps` (basis points of notional
+traded) are profitability per unit of trading — the two numbers that tell you whether a strategy
+survives its own costs. `close_pos` is the gross share position carried into the close.
+
+Underneath, four views of the same run:
+
+```python
+result.rows            # (date, ticker): pnl, eod_pos, close_pos, volume, dvolume
+result.daily           # one row per date
+result.by_ticker()     # totals per ticker, most profitable first
+result.drawdowns()     # every peak-to-trough episode, worst first
+result.cumulative_pnl().plot()
+```
+
+**What the model does and doesn't do.** It fills your whole requested size at the bar price, so
+there is no market impact, no queue position, and no partial fills beyond `vol_cap_per_bar`. Costs
+are linear in shares and notional. Positions are flat-to-flat within the day unless you skip
+`unwind_price`. Treat the output as an upper bound with an explicit cost model attached, not as a
+simulation of execution.
+
 ## API summary
 
 **`Bars`** — one date.
@@ -285,10 +360,13 @@ ds.ret.mean(dim="date").to_pandas().plot()
 `bars_getter(base_path)` returns a preconfigured `BarsSet` factory · `create_child_bars` ·
 `Where` · `load_csv` · `to_frdir` · `finarray.profile`
 
+**`finarray.backtest`** (extra).
+`run_backtest` · `run_date` · `BacktestResult` · `Fees` · `summarize` · `daily_stats` · `drawdowns`
+
 ## Development
 
 ```bash
-uv sync
+uv sync --all-extras
 uv run pytest
 uv run ruff check src tests examples
 uv run mypy

@@ -33,3 +33,22 @@ jobs:
 
       - name: Test
         run: uv run pytest
+
+  # The backtest extra is optional and the kernels have a pure-Python fallback,
+  # so make sure the package still works with numba absent.
+  test-without-numba:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync without the backtest extra
+        run: uv sync --no-dev --group ci-minimal
+
+      # --no-sync, or `uv run` would reinstall the default dev group (and numba)
+      - name: Test
+        run: uv run --no-sync pytest
