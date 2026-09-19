@@ -1,0 +1,2 @@
+# finarray
+Quant research library
