@@ -309,3 +309,229 @@ def test_missing_basedir(tmp_path, capsys):
 def test_bad_time_slice(base, capsys):
     assert run("query", base, "-v", "mid", "--time-slice", "15:50:00") == 1
     assert "START,END" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# --where
+# ---------------------------------------------------------------------------
+
+
+def test_where_open_range(base, capsys):
+    # adv is base_price * 2e5: AAA 1.0e7, BBB 2.4e7, CCC 1.6e6, SPY 1.0e8
+    assert (
+        run(
+            "query",
+            base,
+            "-v",
+            "adv",
+            "--time",
+            "15:54:00",
+            "-D",
+            "2024-11-27",
+            "--where",
+            "adv=2e7:",
+            "--limit",
+            "0",
+        )
+        == 0
+    )
+    lines = rows_of(capsys)
+    assert [line.split(",")[1] for line in lines[1:]] == ["BBB", "SPY"]
+
+
+def test_where_closed_range(base, capsys):
+    assert (
+        run(
+            "query",
+            base,
+            "-v",
+            "adv",
+            "--time",
+            "15:54:00",
+            "-D",
+            "2024-11-27",
+            "--where",
+            "adv=5e6:5e7",
+            "--limit",
+            "0",
+        )
+        == 0
+    )
+    assert [line.split(",")[1] for line in rows_of(capsys)[1:]] == ["AAA", "BBB"]
+
+
+def test_where_upper_bound_only(base, capsys):
+    assert (
+        run(
+            "query",
+            base,
+            "-v",
+            "adv",
+            "--time",
+            "15:54:00",
+            "-D",
+            "2024-11-27",
+            "--where",
+            "adv=:5e6",
+            "--limit",
+            "0",
+        )
+        == 0
+    )
+    assert [line.split(",")[1] for line in rows_of(capsys)[1:]] == ["CCC"]
+
+
+def test_where_equality(base, capsys):
+    assert (
+        run(
+            "query",
+            base,
+            "-v",
+            "adv",
+            "--time",
+            "15:54:00",
+            "-D",
+            "2024-11-27",
+            "--where",
+            "listing_exchange=1",
+            "--limit",
+            "0",
+        )
+        == 0
+    )
+    assert [line.split(",")[1] for line in rows_of(capsys)[1:]] == ["AAA", "BBB"]
+
+
+def test_where_conditions_are_anded(base, capsys):
+    assert (
+        run(
+            "query",
+            base,
+            "-v",
+            "adv",
+            "--time",
+            "15:54:00",
+            "-D",
+            "2024-11-27",
+            "--where",
+            "adv=5e6:",
+            "--where",
+            "listing_exchange=1",
+            "--limit",
+            "0",
+        )
+        == 0
+    )
+    assert [line.split(",")[1] for line in rows_of(capsys)[1:]] == ["AAA", "BBB"]
+
+
+def test_extra_tickers_survive_the_filter(base, capsys):
+    assert (
+        run(
+            "query",
+            base,
+            "-v",
+            "adv",
+            "--time",
+            "15:54:00",
+            "-D",
+            "2024-11-27",
+            "--where",
+            "adv=5e7:",
+            "--extra-tickers",
+            "CCC",
+            "--limit",
+            "0",
+        )
+        == 0
+    )
+    assert [line.split(",")[1] for line in rows_of(capsys)[1:]] == ["CCC", "SPY"]
+
+
+def test_where_composes_with_a_ticker_selection(base, capsys):
+    assert (
+        run(
+            "query",
+            base,
+            "-v",
+            "adv",
+            "--tickers",
+            "AAA,BBB",
+            "--time",
+            "15:54:00",
+            "-D",
+            "2024-11-27",
+            "--where",
+            "adv=2e7:",
+            "--limit",
+            "0",
+        )
+        == 0
+    )
+    assert [line.split(",")[1] for line in rows_of(capsys)[1:]] == ["BBB"]
+
+
+def test_where_applies_to_every_date(base, capsys):
+    assert (
+        run("query", base, "-v", "adv", "--time", "15:54:00", "--where", "adv=2e7:", "--limit", "0")
+        == 0
+    )
+    tickers = {line.split(",")[1] for line in rows_of(capsys)[1:]}
+    assert tickers == {"BBB", "SPY"}
+    assert len(rows_of(capsys)) == 0  # consumed above
+
+
+def test_where_narrows_the_streaming_read(base, capsys):
+    """Filtering changes how much of the grid a limited query has to convert."""
+    assert (
+        run("query", base, "-v", "mid", "-D", "2024-11-27", "--where", "adv=2e7:", "--limit", "3")
+        == 0
+    )
+    lines = rows_of(capsys)
+    assert lines[0] == "date,time,ticker,mid"
+    assert {line.split(",")[2] for line in lines[1:]} <= {"BBB", "SPY"}
+
+
+def test_where_matching_nothing(base, capsys):
+    assert run("query", base, "-v", "adv", "--time", "15:54:00", "--where", "adv=1e12:") == 0
+    assert "no rows matched" in capsys.readouterr().out
+
+
+def test_where_on_a_time_varying_variable_is_rejected(base, capsys):
+    assert run("query", base, "-v", "mid", "--where", "mid=1:2") == 1
+    assert "ticker-only" in capsys.readouterr().err
+
+
+def test_where_on_an_unknown_variable(base, capsys):
+    assert run("query", base, "-v", "mid", "--where", "nope=1:2") == 1
+    assert "not available" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "spec, message",
+    [
+        ("adv", "VAR=MIN:MAX"),
+        ("=5", "VAR=MIN:MAX"),
+        ("adv=", "no value given"),
+        ("adv=abc:", "not a number"),
+        ("adv=:xyz", "not a number"),
+    ],
+)
+def test_malformed_where(base, capsys, spec, message):
+    assert run("query", base, "-v", "mid", "--where", spec) == 1
+    assert message in capsys.readouterr().err
+
+
+def test_where_repeating_a_variable_is_rejected(base, capsys):
+    assert run("query", base, "-v", "mid", "--where", "adv=1:", "--where", "adv=2:") == 1
+    assert "more than once" in capsys.readouterr().err
+
+
+def test_no_file_is_written_when_nothing_matches(base, tmp_path, capsys):
+    out = tmp_path / "empty.csv"
+    assert (
+        run("query", base, "-v", "adv", "--time", "15:54:00", "--where", "adv=1e12:", "-o", out)
+        == 0
+    )
+    assert not out.exists()
+    assert "no rows matched" in capsys.readouterr().err

@@ -398,6 +398,24 @@ date directory unless `--all-dates`/`--dates` is given, so existing invocations 
 - The CLI translates a `NameError` from a bad expression into a `FinArrayError` listing the
   variables that do exist.
 
+## v0.5: `query --where`
+
+`--where VAR=MIN:MAX` (inclusive range, either end optional) or `VAR=VALUE` (equality), repeatable
+and ANDed, plus `--extra-tickers`. Built as a `Where` object directly rather than through
+`sel_where`, whose `extra_tickers` keyword would collide with a variable of that name.
+
+Values parse as int, then float, then string, so `listing_exchange=1` compares against an int and
+`Ndvol3m=1e7:` against a float. A variable named twice is rejected rather than silently taking the
+last one.
+
+Note that `BarsSet.load_date` applies `_active_sels` before `_wheres`, so `--where` is evaluated
+after `--ticker`/`--time` regardless of the order `_apply_selections` calls them in. That is
+harmless here — the constraint variables are ticker-only, so a time selection cannot affect them,
+and a ticker selection just intersects.
+
+Also in v0.5: a query matching nothing prints `# no rows matched` instead of silence, and the CSV
+file sink opens lazily on first write, so an empty result no longer leaves a zero-byte file behind.
+
 ## Which `fr*` scripts were left behind
 
 `frgendaily`, `frgenimb` and `frgeneimb` are not portable and are not planned. Each is a thin date

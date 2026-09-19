@@ -17,6 +17,7 @@ import pandas as pd
 from ..bars import Bars
 from ..bars_set import BarsSet
 from ..util import FinArrayError
+from ..where import Constraint, Where
 from ._common import add_dates_argument, open_bars, resolve_dates, split_list
 
 DEFAULT_LIMIT = 50
@@ -52,6 +53,21 @@ def add_query_parser(subparsers) -> None:
         help="an inclusive time range, e.g. 15:50:00,15:59:59",
     )
 
+    parser.add_argument(
+        "--where",
+        action="append",
+        metavar="EXPR",
+        help=(
+            "restrict tickers by a daily (ticker-only) variable: VAR=MIN:MAX for "
+            "an inclusive range with either end optional, or VAR=VALUE for "
+            "equality. Repeatable; conditions are combined with AND."
+        ),
+    )
+    parser.add_argument(
+        "--extra-tickers",
+        metavar="LIST",
+        help="tickers to keep regardless of --where",
+    )
     add_dates_argument(parser)
     parser.add_argument(
         "-n",
@@ -80,7 +96,61 @@ def add_query_parser(subparsers) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _bound(text: str, spec: str) -> float | None:
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        raise FinArrayError(f"--where {spec!r}: {text!r} is not a number") from None
+
+
+def _value(text: str, spec: str) -> Constraint:
+    text = text.strip()
+    if not text:
+        raise FinArrayError(f"--where {spec!r}: no value given")
+    for cast in (int, float):
+        try:
+            return cast(text)
+        except ValueError:
+            pass
+    return text
+
+
+def _parse_where(specs: list[str]) -> dict[str, Constraint]:
+    """Turn --where strings into Where constraints.
+
+    ``adv=1e7:`` is a range with no upper bound, ``price=2:2500`` a closed one,
+    ``listing_exchange=1`` an equality test.
+    """
+    constraints: dict[str, Constraint] = {}
+    for spec in specs:
+        name, sep, rhs = spec.partition("=")
+        name = name.strip()
+        if not sep or not name:
+            raise FinArrayError(f"--where takes VAR=MIN:MAX or VAR=VALUE; got {spec!r}")
+        if name in constraints:
+            raise FinArrayError(f"--where names {name!r} more than once")
+        if ":" in rhs:
+            low, _, high = rhs.partition(":")
+            constraints[name] = (_bound(low, spec), _bound(high, spec))
+        else:
+            constraints[name] = _value(rhs, spec)
+    return constraints
+
+
 def _apply_selections(bars: BarsSet, args: Namespace) -> BarsSet:
+    if args.where or args.extra_tickers:
+        # Built directly rather than through sel_where, whose `extra_tickers`
+        # keyword would collide with a variable of that name.
+        bars = bars.apply_where(
+            Where(
+                constraints=_parse_where(args.where or []),
+                extra_tickers=tuple(split_list(args.extra_tickers)) or None,
+            )
+        )
+
     if args.ticker:
         bars = bars.sel_ticker(args.ticker)
     elif args.tickers:
@@ -146,13 +216,35 @@ class _TextSink:
         self.sep = sep
         self.header = header
 
+    def _open(self):
+        return self.stream
+
     def write(self, frame: pd.DataFrame) -> None:
-        frame.to_csv(self.stream, sep=self.sep, header=self.header, lineterminator="\n")
+        stream = self._open()
+        frame.to_csv(stream, sep=self.sep, header=self.header, lineterminator="\n")
         self.header = False  # only once, however many chunks follow
-        self.stream.flush()
+        stream.flush()
 
     def close(self) -> None:
         pass
+
+
+class _FileTextSink(_TextSink):
+    """Opens on the first write, so a query matching nothing leaves no file."""
+
+    def __init__(self, path: str, sep: str, header: bool):
+        super().__init__(None, sep, header)
+        self.path = path
+
+    def _open(self):
+        if self.stream is None:
+            # Held open across chunks; run_query closes it in a finally.
+            self.stream = open(self.path, "w", encoding="utf-8", newline="")  # noqa: SIM115
+        return self.stream
+
+    def close(self) -> None:
+        if self.stream is not None:
+            self.stream.close()
 
 
 class _ParquetSink:
@@ -184,15 +276,14 @@ def _resolve_format(args: Namespace) -> str:
     return "csv"
 
 
-def _make_sink(args: Namespace, fmt: str):
+def _make_sink(args: Namespace, fmt: str) -> _TextSink | _ParquetSink:
     header = not args.no_header
+    sep = "\t" if fmt == "tsv" else ","
     if args.output is None:
-        return _TextSink(sys.stdout, "\t" if fmt == "tsv" else ",", header), None
+        return _TextSink(sys.stdout, sep, header)
     if fmt == "parquet":
-        return _ParquetSink(args.output), None
-    # Stays open across every chunk; run_query closes it in a finally.
-    handle = open(args.output, "w", encoding="utf-8", newline="")  # noqa: SIM115
-    return _TextSink(handle, "\t" if fmt == "tsv" else ",", header), handle
+        return _ParquetSink(args.output)
+    return _FileTextSink(args.output, sep, header)
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +309,7 @@ def run_query(args: Namespace) -> None:
     else:
         limit = None if args.output else DEFAULT_LIMIT
 
-    sink, handle = _make_sink(args, fmt)
+    sink = _make_sink(args, fmt)
     emitted = 0
     truncated = False
     try:
@@ -238,8 +329,14 @@ def run_query(args: Namespace) -> None:
             emitted += len(frame)
     finally:
         sink.close()
-        if handle is not None:
-            handle.close()
+
+    if emitted == 0:
+        message = "# no rows matched"
+        if args.output is None:
+            print(message, flush=True)
+        else:
+            print(f"finarray:{message[1:]}; {args.output} not written", file=sys.stderr)
+        return
 
     if truncated:
         print(

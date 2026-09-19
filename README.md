@@ -421,6 +421,31 @@ finarray query bars/eod -v mid -D 2025-01-13:2025-01-17        # inclusive date 
 finarray query bars/eod -v mid -D 2025-01-13,2025-01-15        # or a list
 ```
 
+### Filtering the universe
+
+`--where` restricts tickers by a daily (ticker-only) variable. `VAR=MIN:MAX` is an inclusive range
+with either end optional; `VAR=VALUE` is an equality test. Repeat it to AND conditions together:
+
+```console
+$ finarray query bars/eod -v Ndvol3m,Yadjusted_close --time 15:54:00 -D 2026-06-30 \
+      --where 'Ndvol3m=1e8:' --where 'Yadjusted_close=:50'
+date,ticker,Ndvol3m,Yadjusted_close
+2026-06-30,ASX,128800000.0,42.13
+2026-06-30,B,105900000.0,36.93
+...
+```
+
+The variable names are yours — `--where` knows nothing about what your columns are called, it just
+loads the one you name and checks it has `ticker` as its only dimension. `--extra-tickers` keeps
+tickers regardless, for a benchmark you always want alongside a filtered universe:
+
+```bash
+finarray query bars/eod -v mid --where 'Ndvol3m=1e8:' --extra-tickers SPY --time 15:54:00
+```
+
+This is the [`sel_where`](#filtering-the-ticker-universe) filter from the Python API, so the same
+rules apply: constraint variables are loaded on demand, and a time-varying variable is rejected.
+
 **The limit is a read budget, not a truncation.** `query` streams: it produces rows date by date and
 stops as soon as it has enough, so a capped query against 363 dates of 1689 × 661 bars reads one
 date — and within it, one time step:
