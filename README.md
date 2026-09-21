@@ -590,14 +590,6 @@ uv run pytest
 uv run ruff check src tests examples
 uv run mypy
 ```
-
-## History
-
-`finarray` was written for, and extracted from, a private single-person research repository focused
-on the NYSE closing auction. It has been generalized where that repository's assumptions had leaked
-into it, but its shape still reflects that origin: it is built for panels of ticker-by-time data at
-second granularity, over a window of a day rather than a whole session.
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
